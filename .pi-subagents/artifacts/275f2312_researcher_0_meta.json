@@ -1,0 +1,158 @@
+{
+  "runId": "275f2312",
+  "agent": "researcher",
+  "task": "Research FlashInfer GPU architecture support and runtime requirements, to answer deployment questions about a TTS server using flashinfer-python==0.6.15.post1 with the prebuilt flashinfer-jit-cache==0.6.15.post1+cu128 wheel (AOT precompiled kernels). I need precise, sourced answers to:\n\n1. Which NVIDIA GPU compute capabilities (sm_XX) does FlashInfer 0.6.x actually SUPPORT for the attention/prefill kernels (e.g. batch_prefill_with_ragged_kv_cache, BatchPrefillWithRaggedKVCacheWrapper)? Specifically: is Turing sm_75 (RTX 20 series like 2080 Ti, T4) genuinely supported for these kernels in 0.6.x, or do the prefill/attention kernels require sm_80+ (Ampere)? Check the FlashInfer GitHub repo (flashinfer-ai/flashinfer), docs at docs.flashinfer.ai, and any release notes for 0.6.15. Look for statements like \"requires Ampere or newer\" vs \"sm75 and later\", and note if prefill kernels specifically list sm80+ requirements while only some kernels (e.g. page/decoding) support sm75.\n\n2. For the prebuilt AOT jit-cache wheels (flashinfer-jit-cache +cu128): do they cover all archs from sm_80 through sm_120 (RTX 30/40/50 series, A100, H100, B200), or are some archs excluded (needing runtime JIT with nvcc)? Is there any per-arch wheel variant, or is one manylinux x86_64 wheel universal across archs? Check what's published on the flashinfer.ai wheel index for cu128 and the GitHub releases.\n\n3. What host NVIDIA driver version is required to load kernels from the +cu128 (CUDA 12.8) prebuilt cache? (cubin/PTX from CUDA 12.8 requires driver >= 570.x typically — confirm). Does running the cu128 cache inside a container whose CUDA runtime libs are 12.6 (torch built for cu126) but host driver is newer (e.g. 595) work, and any caveats?\n\n4. RTX 40 series (sm_89) and RTX 50 series (sm_120): any known issues with flashinfer 0.6.15 prefill kernels on those archs?\n\nReturn a concise factual summary with source URLs for each claim, and explicitly flag anything you could not verify. Do not write code.",
+  "exitCode": 1,
+  "usage": {
+    "input": 126474,
+    "output": 56773,
+    "cacheRead": 3816832,
+    "cacheWrite": 0,
+    "cost": 0.0221449648,
+    "turns": 35
+  },
+  "model": "opencode-go/deepseek-v4-flash",
+  "attemptedModels": [
+    "opencode-go/deepseek-v4-flash"
+  ],
+  "modelAttempts": [
+    {
+      "model": "opencode-go/deepseek-v4-flash",
+      "success": false,
+      "exitCode": 1,
+      "error": "Agent 'researcher' requested unavailable child tools: searxng_get_server_configuration, searxng_get_usage_guide.\nThe `tools` field is a strict allowlist; it does not load extension code.\nResolved MCP direct tools missing from the child registry: searxng_get_server_configuration, searxng_get_usage_guide. This indicates a host/pi-mcp-adapter registration problem, not a tool-call failure.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+      "usage": {
+        "input": 126474,
+        "output": 56773,
+        "cacheRead": 3816832,
+        "cacheWrite": 0,
+        "cost": 0.0221449648,
+        "turns": 35
+      }
+    }
+  ],
+  "durationMs": 560913,
+  "toolCount": 54,
+  "error": "Agent 'researcher' requested unavailable child tools: searxng_get_server_configuration, searxng_get_usage_guide.\nThe `tools` field is a strict allowlist; it does not load extension code.\nResolved MCP direct tools missing from the child registry: searxng_get_server_configuration, searxng_get_usage_guide. This indicates a host/pi-mcp-adapter registration problem, not a tool-call failure.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+  "launchContractDigest": "87077119990c04e6ba8bde37cc3d442f5413ec72ddb319f1ab6dfa529b147fba",
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "Concrete, file-level findings returned for all 4 questions with severity ratings. Q1: README.md@v0.6.15 'Support for SM75 (Turing) and later'; flashinfer/jit/core.py check_cuda_arch() (sm75 floor); include/flashinfer/attention/prefill.cuh sm75 code paths with FLASHINFER_RUNTIME_ASSERT('Prefill kernels do not support bf16 on sm75.') at lines ~1989/2599/3370/3961; open bug #3620 + unmerged fix #3621. Q2: .github/workflows/release.yml@v0.6.15 L185 gives exact AOT arch lists (cu128 = '7.5 8.0 8.9 9.0a 10.0a 12.0a'); wheel index flashinfer.ai/whl/cu128/flashinfer-jit-cache lists only manylinux_2_28 x86_64 + aarch64 variants (no per-arch wheels); v0.6.15.post1 x86_64 cu128 wheel = 1.32 GB. Q3: NVIDIA CUDA 12.8 release notes Tables 2-3 (Linux driver >= 570.26 for 12.8 GA); flashinfer/jit/cpp_ext.py get_cuda_version() fallback to torch.version.cuda; env.py version startswith check (0.6.15.post1+cu128 passes). Q4: open issues #3633 (SM120 on CUDA 12.8 JIT bug), #3935, #3828, #2638, #4267, #4299 with dates and 0.6.15 applicability notes."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "curl GitHub API: release v0.6.15.post1 assets + git trees v0.6.15",
+          "result": "passed",
+          "summary": "Confirmed wheel assets/sizes (cu128 x86_64 1.32GB) and located arch/JIT source files in the v0.6.15 tree"
+        },
+        {
+          "command": "curl raw.githubusercontent.com files at tag v0.6.15 (README.md, docs/installation.rst, flashinfer/aot.py, flashinfer/jit/core.py, cpp_ext.py, env.py, compilation_context.py, include/flashinfer/attention/prefill.cuh, decode.cuh, release.yml)",
+          "result": "passed",
+          "summary": "Verified sm75 bf16 assert, smem-estimate code, arch-list normalization, AOT gating, and release arch lists directly from tagged source"
+        },
+        {
+          "command": "curl GitHub search API for issues (sm120 prefill, RTX 5090, RTX 4090, sm75) + individual issues 3620/3621/3633/3935/3828/2638/4090/4267/1648",
+          "result": "passed",
+          "summary": "Retrieved open/closed status, dates, and root-cause details for all cited issues"
+        },
+        {
+          "command": "curl flashinfer.ai/whl/cu128/flashinfer-jit-cache/ and pypi.org/pypi/flashinfer-python/0.6.15.post1/json",
+          "result": "passed",
+          "summary": "Confirmed 0.6.15.post1+cu128 wheel variants and flashinfer-python 0.6.15.post1 exist"
+        },
+        {
+          "command": "web read NVIDIA CUDA 12.8 archive release notes (docs.nvidia.com/cuda/archive/12.8.0)",
+          "result": "passed",
+          "summary": "Extracted Table 2/3: CUDA 12.8 GA Linux driver >= 570.26, shipped 570.86.10, 12.x minor-compat floor 525.60.13"
+        },
+        {
+          "command": "Download and inspect the 1.32GB cu128 wheel fatbin contents",
+          "result": "not-run",
+          "summary": "Arch coverage derived from release workflow + compilation_context.py + aot.py instead; not executed"
+        },
+        {
+          "command": "Execute prefill kernels on physical T4/RTX 50 hardware",
+          "result": "not-run",
+          "summary": "No GPU available in this environment; sm75 launch-bug and sm120 JIT-bug applicability to 0.6.15 based on tagged-code inspection and open issues"
+        }
+      ],
+      "validationOutput": [
+        "Arch list per wheel (from release.yml@v0.6.15): cu128='7.5 8.0 8.9 9.0a 10.0a 12.0a'; cu129='7.5 8.0 8.9 9.0a 10.0a 10.3a 12.0f'; cu130 x86_64='7.5 8.0 8.9 9.0a 10.0a 10.3a 12.0f'; cu130 aarch64 adds 11.0a",
+        "Driver floor for cu128 cubins: Linux >= 570.26 (NVIDIA CUDA 12.8 GA release notes Table 3); driver 595 OK; container libcudart 12.6 OK for driver-API kernel loading but outside NVIDIA forward-only minor-version compat for 12.8-built host code",
+        "Runtime gotchas verified in code: (a) bf16 prefill asserts on sm75; (b) sm75 paged-prefill launch bug #3620 (fix #3621 unmerged); (c) sm120 + CUDA<12.9 raises 'SM 12.x requires CUDA >= 12.9' -> misleading sm75 error (PR #3633 unmerged)"
+      ],
+      "residualRisks": [
+        "sm75 prefill launch failure (#3620) reproduced on 0.6.12/T4; code path unchanged in v0.6.15 and fix unmerged, but not executed on Turing hardware in this research",
+        "RTX 50 + torch cu126/cu128: CompilationContext raises 'SM 12.x requires CUDA >= 12.9' without FLASHINFER_CUDA_ARCH_LIST (open PR #3633); workaround is setting the env var, not verified end-to-end",
+        "B300 (sm103a), GB10 (sm110a), DGX Spark (sm121a) are NOT in the cu128 x86_64 wheel; AOT .so load will fail on those archs unless cu129+/aarch64 wheels or runtime JIT with nvcc are used",
+        "12.8-built host code vs container libcudart 12.6 is outside NVIDIA's (forward-only) minor-version compatibility guarantee; low practical risk due to driver-API loading, untested here",
+        "torch cu126 containers lack nvcc, so runtime JIT fallback for archs missing from the wheel is impossible without installing a CUDA toolkit",
+        "head_dim=512 FA2 prefill/decode modules are excluded from the AOT wheel (aot.py default config / PR #3769); TTS models using head_dim=512 will runtime-JIT (needs nvcc) or fail",
+        "#4267 (extreme negative logits -> zeros) filed on 0.6.12 after v0.6.15 shipped; applicability to 0.6.15 unverified"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Research-only task; no files created or modified (temp fetch artifacts under /tmp only).",
+      "reviewFindings": [
+        "high: include/flashinfer/attention/prefill.cuh (v0.6.15) - sm75 prefill supported for fp16 only; bf16 raises FLASHINFER_RUNTIME_ASSERT ('Prefill kernels do not support bf16 on sm75.') at ~L1989/2599/3370/3961",
+        "high: include/flashinfer/attention/prefill.cuh (v0.6.15) - q-only shared-memory estimate (max_num_mma_kv_smem, ~L2472/4075) causes sm75 prefill launch failure 'invalid argument' per open issue #3620; fix PR #3621 unmerged",
+        "high: flashinfer/compilation_context.py (v0.6.15) - 'SM 12.x requires CUDA >= 12.9' RuntimeError for sm120 devices when CUDA<12.9 and FLASHINFER_CUDA_ARCH_LIST unset; misleading sm75 error downstream; open PR #3633",
+        "medium: .github/workflows/release.yml@v0.6.15 L185 - cu128 wheel omits sm103a/sm110a/sm121a (B300/GB10/DGX Spark need cu129+/aarch64 wheels or nvcc JIT)",
+        "medium: flashinfer/aot.py@v0.6.15 - head_dim=512 FA2 modules excluded from AOT wheel (needs nvcc JIT at runtime)",
+        "low: NVIDIA CUDA 12.8 GA requires Linux driver >= 570.26; driver 595 satisfies it; container cu126 runtime OK for driver-API loading (forward-only minor-version compat caveat)"
+      ],
+      "manualNotes": "All source-level claims were verified against the exact v0.6.15 git tag via raw.githubusercontent.com and the GitHub API (no git operations used). SearXNG web search was largely non-functional for several queries; primary-source fetches (GitHub, NVIDIA docs, wheel indexes) were used instead. The 0.6.15 release is dated 2026-07-17 in this environment; several referenced issues (#3633, #3620/#3621) predate it and remain open, so their fixes are NOT in 0.6.15."
+    }
+  },
+  "transcriptPath": "/home/justinlime/code/fattervoice/.pi-subagents/artifacts/275f2312_researcher_0_transcript.jsonl",
+  "timestamp": 1786627788997
+}

@@ -6,6 +6,7 @@ import asyncio
 import gc
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, fields, is_dataclass
@@ -13,7 +14,6 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 import numpy as np
-from sentence_stream import SentenceBoundaryDetector
 
 from .audio import audio_to_pcm16_bytes, iter_byte_chunks
 from .config import ServerConfig
@@ -25,6 +25,12 @@ from .voice_registry import VoiceEntry, VoiceRegistry
 LOGGER = logging.getLogger(__name__)
 _HARDCODED_MODEL_ALIAS = "omnivoice"
 _STREAMING_PCM_CHUNK_BYTES = 8192
+# OmniVoice native long-form chunking activation threshold in seconds. Set to an
+# effectively unreachable value so the model never switches to its internal
+# chunked generation path — the wrapper owns all text segmentation via
+# split_text_for_streaming, and native chunking would silently change the
+# audio-join behavior (cross-faded seams) for very long single sentences.
+_AUDIO_CHUNK_THRESHOLD_NEVER = 999999.0
 
 
 @dataclass(frozen=True)
@@ -173,6 +179,89 @@ def coerce_waveform_array(waveform: Any) -> np.ndarray:
 
 
 
+# Regex-based sentence segmentation, ported from the reference
+# omnivoice-server implementation (maemreyo/omnivoice-server) and extended:
+# - splits after ANY sentence-ending punctuation plus whitespace (no uppercase
+#   lookahead), so lowercase sentence starts are recognized;
+# - never splits when the punctuation itself is surrounded by whitespace, so
+#   spaced ellipses (``. . .``) stay attached;
+# - the false-boundary merge pass protects decimals, version numbers,
+#   abbreviations, and URLs, so characters are never detached or dropped.
+_SENTENCE_END_RE = re.compile(
+    r"(?<=[.!?])(?<!\s[.!?])\s+"
+    r"|(?<=[。！？])"
+)
+_FALSE_END_RE = re.compile(
+    r"\d+\.\d+"  # Decimals: 3.14
+    r"|v\d+\.\d+"  # Version numbers: v2.1.0
+    r"|[A-Z][a-z]{0,3}\."  # Abbreviations: Dr., Inc.
+    r"|\w+\.\w{2,6}(?:/|\s|$)"  # URLs: example.com
+    r"|e\.g\.|i\.e\.|etc\.|vs\.|a\.m\.|p\.m\.|cf\.|approx\.|pp\.|et al\."  # Lowercase abbreviations
+    r"|jan\.|feb\.|mar\.|apr\.|jun\.|jul\.|aug\.|sep\.|oct\.|nov\.|dec\."  # Lowercase months
+)
+
+
+def split_text_into_sentences(text: str) -> list[str]:
+    """Split text into sentence-like segments at punctuation boundaries.
+
+    Usage:
+        ``split_text_for_streaming`` calls this helper as its first pass so every
+        valid sentence becomes its own synthesis segment. The splitter breaks
+        after sentence-ending punctuation (``.``/``!``/``?`` followed by
+        whitespace, or ``。``/``！``/``？``) regardless of whether the next
+        sentence starts uppercase or lowercase, then merges back any pieces that
+        were split inside a false boundary (decimals, version numbers, URLs,
+        uppercase abbreviations, and common lowercase abbreviations such as
+        ``e.g.``, ``i.e.``, ``etc.``, ``vs.``, ``a.m.``/``p.m.``, ``cf.``,
+        ``approx.``, ``pp.``, ``et al.``, and lowercase month names) so no
+        characters are ever dropped from the text the model receives. Punctuation
+        surrounded by whitespace (spaced ellipses like ``. . .``) is never
+        treated as a boundary.
+
+    Parameters:
+        text: The raw synthesis text to segment.
+
+    Returns:
+        A non-empty ordered list of stripped sentence segments, or an empty
+        list when the input is blank.
+    """
+    normalized_text = text.strip()
+    if not normalized_text:
+        return []
+
+    raw_segments = [
+        segment.strip()
+        for segment in _SENTENCE_END_RE.split(normalized_text)
+        if segment.strip()
+    ]
+    if not raw_segments:
+        return [normalized_text]
+
+    merged_segments: list[str] = []
+    index = 0
+    while index < len(raw_segments):
+        current_segment = raw_segments[index]
+
+        # Merge back pieces split at false boundaries (e.g. "Dr." or "3.14"
+        # followed by more of the same token). The -2 tolerance accounts for
+        # trailing punctuation such as "v2.1." where the period after the
+        # false-end pattern should still trigger a merge.
+        while index + 1 < len(raw_segments):
+            last_false_end = None
+            for false_end_match in _FALSE_END_RE.finditer(current_segment):
+                last_false_end = false_end_match
+            if last_false_end and last_false_end.end() >= len(current_segment) - 2:
+                current_segment = f"{current_segment} {raw_segments[index + 1]}"
+                index += 1
+            else:
+                break
+
+        merged_segments.append(current_segment)
+        index += 1
+
+    return merged_segments
+
+
 def split_text_for_streaming(text: str, max_length: int = 400, break_point_lookback: int = 100) -> list[str]:
     """Split request text into sentence-first synthesis segments with a length cap.
 
@@ -180,8 +269,11 @@ def split_text_for_streaming(text: str, max_length: int = 400, break_point_lookb
         OmniVoice currently exposes buffered generation rather than a documented
         model-incremental audio streaming API. The wrapper splits text into
         sentence-like segments so each synthesis call stays bounded in memory
-        and time. Any single segment that exceeds ``max_length`` characters is
-        broken further on word boundaries to prevent runaway resource usage.
+        and time. Every valid sentence (detected by punctuation-aware regex)
+        becomes its own segment and resets the character cap; any single
+        segment that still exceeds ``max_length`` characters is broken further
+        on word boundaries, preferring natural pause markers inside the
+        lookback window, to prevent runaway resource usage.
 
     Parameters:
         text: The already-validated request text that should be segmented.
@@ -193,15 +285,7 @@ def split_text_for_streaming(text: str, max_length: int = 400, break_point_lookb
         A non-empty ordered list of stripped text segments suitable for
         sequential synthesis.
     """
-    sentence_detector = SentenceBoundaryDetector()
-    raw_segments = [
-        segment.strip()
-        for segment in sentence_detector.add_chunk(text)
-        if segment.strip()
-    ]
-    trailing_segment = sentence_detector.finish().strip()
-    if trailing_segment:
-        raw_segments.append(trailing_segment)
+    raw_segments = split_text_into_sentences(text)
 
     if not raw_segments:
         return [text.strip()]
@@ -630,11 +714,21 @@ class TtsService:
         import torch
         from omnivoice import OmniVoice
 
+        flashinfer_active = self._resolve_flashinfer_active(torch)
+
+        dtype_name = self.config.dtype
+        if flashinfer_active and dtype_name.strip().lower() != "float16":
+            LOGGER.warning(
+                "FlashInfer kernels are hard-coded for float16; coercing dtype from %s to float16",
+                dtype_name,
+            )
+            dtype_name = "float16"
+
         try:
-            dtype = getattr(torch, self.config.dtype)
+            dtype = getattr(torch, dtype_name)
         except AttributeError as exc:
             raise ValueError(
-                f"Unsupported torch dtype {self.config.dtype!r}."
+                f"Unsupported torch dtype {dtype_name!r}."
             ) from exc
 
         model_source = resolve_cached_model_snapshot_path(self.model_id, None)
@@ -664,7 +758,7 @@ class TtsService:
             _HARDCODED_MODEL_ALIAS,
             model_source,
             self.device_map,
-            self.config.dtype,
+            dtype_name,
         )
         self._model = OmniVoice.from_pretrained(
             model_source,
@@ -673,6 +767,148 @@ class TtsService:
             load_asr=False,
         )
         LOGGER.info("Model ready with sample rate %s Hz", self._model.sampling_rate)
+
+        if flashinfer_active:
+            self._apply_flashinfer_acceleration()
+
+    def _resolve_flashinfer_active(self, torch) -> bool:
+        """Decide whether FlashInfer acceleration should be applied for this run.
+
+        Usage:
+            `_load_model` calls this helper before loading the model so the
+            effective dtype (float16 coercion) and the FlashInfer patch decision
+            are made in one place. The configured mode is one of ``auto``, ``on``,
+            or ``off``:
+
+            - ``off``: never apply FlashInfer.
+            - ``on``: always apply FlashInfer; fails fast when the device is not
+              CUDA (the CLI already validates this, but programmatic
+              configuration is re-checked here).
+            - ``auto`` (default): apply FlashInfer on sm_80+ NVIDIA GPUs
+              (Ampere/Ada/Hopper/Blackwell) and skip it on Turing (sm_75, e.g.
+              RTX 20 series) or non-CUDA devices, logging the reason. This is
+              what makes a single image safe across the full RTX 20-50 range:
+              RTX 30/40/50 and datacenter GPUs get the fast path, while RTX 20
+              (where the upstream ragged-prefill kernel has a known launch bug)
+              transparently runs the standard path.
+
+        Parameters:
+            torch: The imported torch module used for CUDA capability queries.
+
+        Returns:
+            ``True`` when FlashInfer should be applied and dtype coerced to
+            float16, otherwise ``False``.
+        """
+        mode = self.config.flashinfer
+        if mode == "off":
+            return False
+        if mode == "on":
+            if not self.device_map.startswith("cuda"):
+                raise ValueError(
+                    "FlashInfer acceleration requires a CUDA device (got "
+                    f"{self.device_map!r}). Use --flashinfer auto or --flashinfer off."
+                )
+            LOGGER.info("FlashInfer mode=on: acceleration enabled")
+            return True
+
+        # auto mode
+        if not self.device_map.startswith("cuda"):
+            LOGGER.info(
+                "FlashInfer auto mode: skipped (device %s is not CUDA)",
+                self.device_map,
+            )
+            return False
+        compute_capability = self._cuda_device_capability(torch)
+        if compute_capability is None or compute_capability[0] < 8:
+            LOGGER.warning(
+                "FlashInfer auto mode: skipped (GPU compute capability %s is below "
+                "sm_80; FlashInfer kernels require Ampere or newer, and the upstream "
+                "prefill path is unreliable on Turing). Running the standard path.",
+                ".".join(str(part) for part in compute_capability)
+                if compute_capability is not None
+                else "unknown",
+            )
+            return False
+        LOGGER.info(
+            "FlashInfer auto mode: enabled on compute capability %s (sm_%s+)",
+            ".".join(str(part) for part in compute_capability),
+            compute_capability[0],
+        )
+        return True
+
+    def _cuda_device_capability(self, torch) -> tuple[int, int] | None:
+        """Return the (major, minor) compute capability of the configured CUDA device.
+
+        Usage:
+            ``_resolve_flashinfer_active`` calls this helper in auto mode to
+            decide whether the installed GPU can run FlashInfer kernels. The
+            configured ``device_map`` may be ``cuda`` or ``cuda:N``; the first
+            explicit device index (or 0) is queried.
+
+        Parameters:
+            torch: The imported torch module used for CUDA queries.
+
+        Returns:
+            A ``(major, minor)`` tuple for the device, or ``None`` when CUDA is
+            unavailable or the device cannot be queried.
+        """
+        try:
+            if not torch.cuda.is_available():
+                return None
+            device_index = 0
+            device_match = re.match(r"cuda(?::(\d+))?", self.device_map)
+            if device_match is not None and device_match.group(1) is not None:
+                device_index = int(device_match.group(1))
+            return tuple(int(part) for part in torch.cuda.get_device_capability(device_index))
+        except Exception:  # pragma: no cover - defensive; capability queries are stable in practice.
+            return None
+
+    def _apply_flashinfer_acceleration(self) -> None:
+        """Patch the loaded OmniVoice model to use FlashInfer-accelerated generation.
+
+        Usage:
+            `_load_model` calls this helper right after the model is loaded when
+            FlashInfer is active. The vendored patch (see
+            `fattervoice/omnivoice_flashinfer.py`) replaces `_generate_iterative`
+            with a packed-sequence implementation that fuses the cond/uncond CFG
+            pair into one ragged-attention row, replaces RMSNorm/RoPE/MLP with
+            fused FlashInfer kernels, and optionally replays CUDA graphs.
+
+            The model was already loaded in float16 (coerced in `_load_model`)
+            and on a CUDA device, but the device check is repeated here so
+            programmatic configuration (e.g. tests) fails fast with a clear error
+            instead of a cryptic kernel mismatch.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The loaded model is patched in place.
+        """
+        if not self.device_map.startswith("cuda"):
+            raise ValueError(
+                "FlashInfer acceleration requires a CUDA device (got "
+                f"{self.device_map!r})."
+            )
+        try:
+            import flashinfer  # noqa: F401 - presence check; kernels used via the patch
+        except ImportError as exc:
+            raise ImportError(
+                "FlashInfer acceleration is enabled but the flashinfer packages are not installed. "
+                "Install the optional dependencies (uv sync --extra flashinfer) or pass "
+                "--no-enable-flashinfer."
+            ) from exc
+
+        from .omnivoice_flashinfer import apply_flashinfer
+
+        apply_flashinfer(
+            self._model,
+            enable_cuda_graph=self.config.flashinfer_cuda_graph,
+        )
+        LOGGER.info(
+            "FlashInfer acceleration enabled (cuda_graph=%s)",
+            self.config.flashinfer_cuda_graph,
+        )
 
     def _require_model(self):
         """Return the loaded OmniVoice model instance or fail with a clear error.
@@ -868,6 +1104,7 @@ class TtsService:
             "class_temperature": self.config.class_temperature,
             "layer_penalty_factor": self.config.layer_penalty_factor,
             "postprocess_output": self.config.postprocess_output_audio,
+            "audio_chunk_threshold": _AUDIO_CHUNK_THRESHOLD_NEVER,
         }
         if voice.instruct is not None:
             generation_kwargs["instruct"] = voice.instruct

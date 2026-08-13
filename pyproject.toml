@@ -29,8 +29,8 @@ dependencies = [
     "pydantic>=2.8.0",
     "sentence-stream>=1.2.0,<2",
     "soundfile>=0.12.1",
-    "torch>=2.5.1",
-    "torchaudio>=2.5.1",
+    "torch>=2.11.0,<2.12",
+    "torchaudio>=2.11.0,<2.12",
     "transformers>=5.3.0",
     "uvicorn[standard]>=0.30.0",
     "wyoming>=1.8.0,<2",
@@ -39,6 +39,10 @@ dependencies = [
 [project.optional-dependencies]
 mp3 = ["pydub>=0.25.1"]
 dev = ["pytest>=8.0.0", "httpx>=0.27.0"]
+flashinfer = [
+    "flashinfer-python==0.6.15.post1",
+    "flashinfer-jit-cache==0.6.15.post1+cu130",
+]
 
 [project.scripts]
 fattervoice = "fattervoice.cli:main"
@@ -67,10 +71,16 @@ packages = ["fattervoice"]
 testpaths = ["tests"]
 
 [[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "flashinfer-cu130"
+url = "https://flashinfer.ai/whl/cu130/"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu126" }
-torchaudio = { index = "pytorch-cu126" }
+torch = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
+"flashinfer-jit-cache" = { index = "flashinfer-cu130" }

@@ -511,6 +511,10 @@ class TtsServiceTests(unittest.TestCase):
         self.assertEqual(len(fake_model.generated_requests), 2)
         self.assertEqual(fake_model.generated_requests[0]["language"], "en")
         self.assertEqual(fake_model.generated_requests[0]["speed"], 1.25)
+        # Failsafe: OmniVoice native chunking is disabled by an unreachable
+        # threshold so the wrapper's sentence segmentation stays the only
+        # chunking mechanism.
+        self.assertEqual(fake_model.generated_requests[0]["audio_chunk_threshold"], 999999.0)
         self.assertEqual(
             fake_model.generated_requests[0]["voice_clone_prompt"],
             fake_model.generated_requests[1]["voice_clone_prompt"],
@@ -720,6 +724,226 @@ class TtsServiceTests(unittest.TestCase):
         self.assertTrue(streamed_chunks)
         self.assertTrue(all(streamed_chunk for streamed_chunk in streamed_chunks))
         self.assertEqual(len(fake_model.generated_requests), 1)
+
+
+class TextSplittingTests(unittest.TestCase):
+    """Verify regex-based sentence segmentation and the character cap fallback.
+
+    These tests exercise the splitter directly so they stay independent of the
+    service-level test config helpers.
+    """
+
+    def test_split_text_into_sentences_splits_lowercase_sentence_starts(self) -> None:
+        """Ensure lowercase sentence starts are recognized as boundaries.
+
+        Usage:
+            Sentence-ending punctuation plus whitespace is always a boundary,
+            regardless of whether the next sentence starts uppercase or
+            lowercase. Abbreviation protection is handled by the merge pass,
+            not by requiring an uppercase start.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts each sentence becomes its own segment.
+        """
+        from fattervoice.service import split_text_into_sentences
+
+        self.assertEqual(
+            split_text_into_sentences("Hello world. second line follows. third too."),
+            ["Hello world.", "second line follows.", "third too."],
+        )
+
+    def test_split_text_into_sentences_merges_lowercase_abbreviations(self) -> None:
+        """Ensure lowercase abbreviations are not false sentence boundaries.
+
+        Usage:
+            With lowercase sentence starts now split, abbreviations like
+            `e.g.` and `p.m.` must be re-merged by the false-boundary pass so
+            they never detach from their sentence.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts abbreviation-adjacent splits are merged back.
+        """
+        from fattervoice.service import split_text_into_sentences
+
+        self.assertEqual(
+            split_text_into_sentences("Use e.g. apples. It is fine."),
+            ["Use e.g. apples.", "It is fine."],
+        )
+        self.assertEqual(
+            split_text_into_sentences("Call at 5 p.m. tomorrow. Thanks."),
+            ["Call at 5 p.m. tomorrow.", "Thanks."],
+        )
+        self.assertEqual(
+            split_text_into_sentences("On jan. 15 we start. OK."),
+            ["On jan. 15 we start.", "OK."],
+        )
+
+    def test_split_text_into_sentences_does_not_merge_sentence_final_words(self) -> None:
+        """Ensure ordinary sentence-final words never trigger false merges.
+
+        Usage:
+            Words that merely end in letters resembling abbreviation fragments
+            (e.g. `no.`, `final.`, `are.`) must still split as normal sentence
+            ends.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts the sentences stay separate.
+        """
+        from fattervoice.service import split_text_into_sentences
+
+        self.assertEqual(
+            split_text_into_sentences("He said no. Then I left."),
+            ["He said no.", "Then I left."],
+        )
+        self.assertEqual(
+            split_text_into_sentences("It was final. Next step."),
+            ["It was final.", "Next step."],
+        )
+        self.assertEqual(
+            split_text_into_sentences("We are. Now what."),
+            ["We are.", "Now what."],
+        )
+
+    def test_split_text_into_sentences_keeps_spaced_ellipses_attached(self) -> None:
+        """Ensure spaced ellipses are never treated as sentence boundaries.
+
+        Usage:
+            Punctuation surrounded by whitespace (`. . .`) is a trailing
+            artifact, not a boundary, and must stay attached to its sentence.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts the ellipsis stays inside one segment.
+        """
+        from fattervoice.service import split_text_into_sentences
+
+        self.assertEqual(
+            split_text_into_sentences("Wait . . . that is wrong. OK?"),
+            ["Wait . . . that is wrong.", "OK?"],
+        )
+
+    def test_split_text_into_sentences_preserves_numerics_and_currency(self) -> None:
+        """Ensure decimals and currency amounts are never split or altered.
+
+        Usage:
+            The previous sentence-stream-based detector dropped characters
+            inside amounts such as `$1,234.56`. The regex splitter must keep
+            the entire amount attached to its sentence.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts the text round-trips as one segment.
+        """
+        from fattervoice.service import split_text_into_sentences
+
+        text = "The value is 3.14 and the total was $1,234.56 today."
+        self.assertEqual(split_text_into_sentences(text), [text])
+
+    def test_split_text_into_sentences_keeps_abbreviations_attached(self) -> None:
+        """Ensure common abbreviations do not produce false sentence breaks.
+
+        Usage:
+            `Dr. Smith` must stay one segment even though it contains a
+            period followed by a capital letter.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts the abbreviation stays attached.
+        """
+        from fattervoice.service import split_text_into_sentences
+
+        segments = split_text_into_sentences(
+            "Dr. Smith and Mrs. Jones went home. It was fine."
+        )
+        self.assertEqual(
+            segments,
+            ["Dr. Smith and Mrs. Jones went home.", "It was fine."],
+        )
+
+    def test_split_text_for_streaming_chunks_every_sentence_and_resets_cap(self) -> None:
+        """Ensure every valid sentence becomes its own segment.
+
+        Usage:
+            Short sentences must each reset the character cap instead of being
+            merged together, preserving per-sentence synthesis granularity.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts one segment per sentence.
+        """
+        from fattervoice.service import split_text_for_streaming
+
+        segments = split_text_for_streaming("First sentence. Second one. Third!")
+        self.assertEqual(segments, ["First sentence.", "Second one.", "Third!"])
+
+    def test_split_text_for_streaming_caps_oversized_sentence_without_losing_text(self) -> None:
+        """Ensure an oversized single sentence is capped losslessly.
+
+        Usage:
+            A long run-on sentence without punctuation must be split at word
+            boundaries, never exceeding the cap, and the original text must
+            round-trip exactly when segments are rejoined.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts cap compliance and exact round-trip.
+        """
+        from fattervoice.service import split_text_for_streaming
+
+        run_on = "the quick brown fox jumps over the lazy dog " * 13
+        segments = split_text_for_streaming(
+            run_on, max_length=400, break_point_lookback=100
+        )
+        self.assertTrue(all(len(segment) <= 400 for segment in segments))
+        self.assertEqual(" ".join(segments), run_on.strip())
+
+    def test_split_text_for_streaming_prefers_commas_in_lookback_window(self) -> None:
+        """Ensure comma break points inside the lookback window are preferred.
+
+        Usage:
+            When an oversized sentence contains commas near the cap, the
+            splitter must cut after a comma instead of at a bare word boundary.
+
+        Parameters:
+            None.
+
+        Returns:
+            None. The test asserts cap compliance, exact round-trip, and that
+            at least one segment ends at a comma-style break point.
+        """
+        from fattervoice.service import split_text_for_streaming
+
+        text = (
+            "the quick brown fox, eager to jump, and the lazy dog, resting quietly, " * 6
+            + "then they all decided to go home together finally"
+        )
+        segments = split_text_for_streaming(
+            text, max_length=400, break_point_lookback=100
+        )
+        self.assertTrue(all(len(segment) <= 400 for segment in segments))
+        self.assertEqual(" ".join(segments), text.strip())
+        self.assertTrue(
+            any(segment.rstrip().endswith((",", " and")) for segment in segments)
+        )
 
 
 if __name__ == "__main__":

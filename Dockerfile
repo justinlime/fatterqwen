@@ -1,6 +1,6 @@
 ARG MODEL_SELECTION=all
 
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04
 ARG MODEL_SELECTION
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
@@ -34,7 +34,7 @@ COPY fattervoice/__init__.py /app/fattervoice/__init__.py
 COPY fattervoice/model_catalog.py /app/fattervoice/model_catalog.py
 COPY fattervoice/prefetch.py /app/fattervoice/prefetch.py
 
-RUN uv sync --extra mp3 --no-install-project && \
+RUN uv sync --extra mp3 --extra flashinfer --no-install-project && \
     rm -rf /root/.cache/uv
 
 # Prefetch the selected OmniVoice assets during the image build so runtime stays offline.
