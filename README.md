@@ -92,7 +92,6 @@ All formats are validated at startup so broken or unreadable reference files fai
 | `--max-sentence-length` | `FATTERVOICE_MAX_SENTENCE_LENGTH` | `400` | Maximum character length of a single synthesis segment. All text is split into sentence-sized segments first; only segments exceeding this cap are broken further on word boundaries. Default 400 (~25s of speech). Setting this too high may induce higher peak VRAM usage during generation. Setting it too low may cause unnatural-sounding pauses from extra synthesis boundaries. |
 | `--break-point-lookback` | `FATTERVOICE_BREAKPOINT_WINDOW` | `100` | Number of characters before the max sentence length to search for a natural break point (comma, conjunction, etc.) when splitting oversized segments. If no suitable break is found in this window, a hard word-boundary split is used. If you increase `--max-sentence-length` past its default, you should probably increase this as well to prevent breaks in unsuitable locations. |
 | `--flashinfer` | `FATTERVOICE_FLASHINFER` | `auto` | FlashInfer acceleration mode: `auto` (default), `on`, or `off`. `auto` enables FlashInfer on sm_80+ NVIDIA GPUs (Ampere RTX 30 / Ada RTX 40 / Hopper / Blackwell RTX 50, A100/H100/B200) and falls back to the standard path on Turing (RTX 20) or non-CUDA devices; when active it implies float16 and coerces the dtype automatically (logged). `on` forces FlashInfer and requires `--device cuda:*`. `off` always uses the standard path. Measured on an RTX 3090: ~1.9x faster model compute, ~1.5x faster end-to-end (upstream H100 benchmarks report 2–2.9x). See [FlashInfer acceleration](#flashinfer-acceleration). |
-| `--flashinfer-cuda-graph` / `--no-flashinfer-cuda-graph` | `FATTERVOICE_FLASHINFER_CUDA_GRAPH` | `false` | Replays CUDA graphs for FlashInfer generation. Only meaningful when FlashInfer is active. Recommended only for fixed-shape workloads: each distinct sequence shape pays a one-time graph capture, and this server splits text into variable-length sentence segments, so per-shape captures can exceed the replay savings (measured slower than plain FlashInfer on mixed-length streaming traffic). |
 
 Boolean environment variables accept `1`, `true`, `yes`, or `on` for true, and `0`, `false`, `no`, or `off` for false.
 
@@ -102,7 +101,7 @@ The runtime model is now hardcoded to `omnivoice`, Wyoming support is always ena
 
 ## FlashInfer acceleration
 
-[FlashInfer](https://github.com/flashinfer-ai/flashinfer) kernels accelerate OmniVoice inference by ~2–2.9x (upstream H100 benchmark) with no measurable quality change. The integration is a vendored copy of the upstream `omnivoice_flashinfer.py` patch (`fattervoice/omnivoice_flashinfer.py`) that replaces OmniVoice's iterative decoder with a packed-sequence implementation (cond+uncond CFG pair in one ragged-attention row, fused RMSNorm/RoPE/MLP kernels, optional CUDA graphs). It is not yet shipped in any released `omnivoice` PyPI package, which is why the patch lives in this repo.
+[FlashInfer](https://github.com/flashinfer-ai/flashinfer) kernels accelerate OmniVoice inference by ~2–2.9x (upstream H100 benchmark) with no measurable quality change. The integration is a vendored copy of the upstream `omnivoice_flashinfer.py` patch (`fattervoice/omnivoice_flashinfer.py`) that replaces OmniVoice's iterative decoder with a packed-sequence implementation (cond+uncond CFG pair in one ragged-attention row, fused RMSNorm/RoPE/MLP kernels). It is not yet shipped in any released `omnivoice` PyPI package, which is why the patch lives in this repo.
 
 FlashInfer is **enabled by default in `auto` mode** — no flags needed. The server probes the GPU at startup:
 
@@ -126,7 +125,6 @@ FlashInfer is **enabled by default in `auto` mode** — no flags needed. The ser
 ### Notes
 
 - The prebuilt kernel cache (`flashinfer-jit-cache==0.6.15.post1+cu130`) is fetched from the FlashInfer index during install; there is no runtime JIT compilation, so the offline Docker image keeps working offline.
-- CUDA graphs (`--flashinfer-cuda-graph`) are exposed but default off: with this server's sentence-split streaming, request shapes vary constantly, so graph captures can cost more than they save. Leave it off unless your traffic is fixed-shape.
 - `--flashinfer on` fails fast at startup if the device is not CUDA; `--flashinfer off` disables acceleration entirely.
 
 ## Interfaces

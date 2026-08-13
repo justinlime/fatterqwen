@@ -59,7 +59,6 @@ class ServerConfig:
     break_point_lookback: int = 100
     preload_voice: str | None = None
     flashinfer: str = "auto"
-    flashinfer_cuda_graph: bool = False
 
     @property
     def wyoming_uri(self) -> str:
@@ -138,7 +137,6 @@ def format_server_config_summary(config: ServerConfig) -> str:
                 ("Log level", config.log_level),
                 ("Default language", config.default_language),
                 ("FlashInfer", config.flashinfer),
-                ("FlashInfer CUDA graph", format_config_value(config.flashinfer_cuda_graph)),
             ),
         ),
         (
@@ -370,12 +368,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="FlashInfer acceleration mode. auto (default): enables FlashInfer on sm_80+ NVIDIA GPUs (Ampere RTX 30 / Ada RTX 40 / Hopper / Blackwell RTX 50, plus A100/H100/B200) and automatically uses float16; falls back to the standard path on Turing (RTX 20) or non-CUDA devices. on: force FlashInfer (requires --device cuda:*; float16 is implied). off: always use the standard path.",
     )
     parser.add_argument(
-        "--flashinfer-cuda-graph",
-        action=argparse.BooleanOptionalAction,
-        default=environment_flag("FATTERVOICE_FLASHINFER_CUDA_GRAPH", False),
-        help="Replay CUDA graphs for FlashInfer generation (recommended for fixed batch=1 low-latency workloads; each distinct sequence shape pays one capture). Only meaningful when FlashInfer is active.",
-    )
-    parser.add_argument(
         "--log-level",
         default=environment_default("FATTERVOICE_LOG_LEVEL", "INFO"),
         help="Python logging level.",
@@ -454,5 +446,4 @@ def parse_server_config(argv: Sequence[str] | None = None) -> ServerConfig:
         max_sentence_length=args.max_sentence_length,
         break_point_lookback=args.break_point_lookback,
         flashinfer=args.flashinfer,
-        flashinfer_cuda_graph=args.flashinfer_cuda_graph,
     )

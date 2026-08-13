@@ -895,20 +895,14 @@ class TtsService:
         except ImportError as exc:
             raise ImportError(
                 "FlashInfer acceleration is enabled but the flashinfer packages are not installed. "
-                "Install the optional dependencies (uv sync --extra flashinfer) or pass "
-                "--no-enable-flashinfer."
+                "Install the optional dependencies (uv sync --extra flashinfer) or run with "
+                "--flashinfer off."
             ) from exc
 
         from .omnivoice_flashinfer import apply_flashinfer
 
-        apply_flashinfer(
-            self._model,
-            enable_cuda_graph=self.config.flashinfer_cuda_graph,
-        )
-        LOGGER.info(
-            "FlashInfer acceleration enabled (cuda_graph=%s)",
-            self.config.flashinfer_cuda_graph,
-        )
+        apply_flashinfer(self._model)
+        LOGGER.info("FlashInfer acceleration enabled")
 
     def _require_model(self):
         """Return the loaded OmniVoice model instance or fail with a clear error.

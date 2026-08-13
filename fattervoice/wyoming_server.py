@@ -43,21 +43,19 @@ def _format_elapsed(secs: float) -> str:
 def _format_rtf(audio_seconds: float, wall_seconds: float) -> str:
     """Format Real-Time Factor with a human-readable speed clarification.
 
-    RTF = audio_duration / wall_clock_time.
-    - RTF < 1.0 means faster than real time (e.g. 0.5 = 2x real-time speed)
+    RTF = wall_clock_time / audio_duration: seconds of compute needed to
+    produce one second of audio.
+    - RTF < 1.0 means faster than real time (e.g. RTF 0.5 = 2.0x real-time speed)
     - RTF == 1.0 means exactly real time
-    - RTF > 1.0 means slower than real time (e.g. 2.0 = 0.5x real-time speed)
+    - RTF > 1.0 means slower than real time (e.g. RTF 2.0 = 0.5x real-time speed)
     """
-    if wall_seconds <= 0:
+    if wall_seconds <= 0 or audio_seconds <= 0:
         return "RTF: N/A (no wall time)"
-    rtf = audio_seconds / wall_seconds
-    if rtf < 1.0:
-        speed = 1.0 / rtf
+    rtf = wall_seconds / audio_seconds
+    speed = audio_seconds / wall_seconds
+    if speed >= 1.0:
         return f"RTF: {rtf:.3f} ({speed:.1f}x real-time speed)"
-    elif rtf > 1.0:
-        speed = 1.0 / rtf
-        return f"RTF: {rtf:.3f} ({speed:.2f}x real-time speed)"
-    return f"RTF: {rtf:.3f} (1.0x real-time speed)"
+    return f"RTF: {rtf:.3f} ({speed:.2f}x real-time speed)"
 
 
 _HARDCODED_WYOMING_AUDIO_CHUNK_SAMPLES = 4096
